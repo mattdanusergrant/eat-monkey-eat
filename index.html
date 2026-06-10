@@ -131,6 +131,7 @@
 
   <div class="barbtn">
     <button class="act go" id="endday">END DAY &raquo;</button>
+    <button class="act" id="mutebtn" style="flex:0 0 auto;background:#3a2c52;box-shadow:none">🔊</button>
     <button class="act" id="reset" style="flex:0 0 auto;background:#3a2c52;box-shadow:none">RESET</button>
   </div>
 
@@ -196,10 +197,36 @@ function fresh(){return{
   stats:{appetite:1,stomach:1,jaw:1,lungs:1,gut:1,grip:1},
   xp:   {appetite:0,stomach:0,jaw:0,lungs:0,gut:0,grip:0},
   up:{gutWidener:false,steelJaw:false,reinfLungs:false,ultraGrip:false,bacterialWall:false,roboColon:false},
-  tier:0, wins:0, champion:false, tab:'train',
+  tier:0, wins:0, champion:false, tab:'train', mute:false,
 };}
 function load(){try{const r=localStorage.getItem(SAVE);if(r){S=Object.assign(fresh(),JSON.parse(r));return;}}catch(e){}S=fresh();}
 function save(){try{localStorage.setItem(SAVE,JSON.stringify(S));}catch(e){}}
+
+// ---------- audio (WebAudio chimes, no assets) ----------
+let AC=null;
+function beep(f,d=0.08,type='square',g=0.04,when=0){
+  if(!S||S.mute)return;
+  try{
+    AC=AC||new (window.AudioContext||window.webkitAudioContext)();
+    if(AC.state==='suspended')AC.resume();
+    const t=AC.currentTime+when;
+    const o=AC.createOscillator(),v=AC.createGain();
+    o.type=type;o.frequency.value=f;
+    v.gain.setValueAtTime(g,t);v.gain.exponentialRampToValueAtTime(0.0001,t+d);
+    o.connect(v);v.connect(AC.destination);o.start(t);o.stop(t+d);
+  }catch(e){}
+}
+const SFX={
+  chomp:()=>beep(170+Math.random()*70,0.05,'square',0.03),
+  drop: ()=>{beep(220,0.08,'sawtooth',0.04);beep(110,0.12,'sawtooth',0.04,0.06);},
+  gulp: ()=>beep(90,0.15,'sine',0.06),
+  good: ()=>{beep(523,0.09,'triangle',0.05);beep(784,0.12,'triangle',0.05,0.08);},
+  bad:  ()=>{beep(196,0.18,'sawtooth',0.05);beep(98,0.3,'sawtooth',0.05,0.12);},
+  cash: ()=>{beep(880,0.06,'square',0.035);beep(1175,0.1,'square',0.035,0.05);},
+  win:  ()=>{[523,659,784,1047].forEach((f,i)=>beep(f,0.16,'triangle',0.06,i*0.12));},
+  lose: ()=>{[330,262,196,131].forEach((f,i)=>beep(f,0.18,'sawtooth',0.04,i*0.14));},
+  levelup:()=>{[660,880].forEach((f,i)=>beep(f,0.1,'triangle',0.05,i*0.08));},
+};
 
 // ---------- derived ----------
 const appetiteMax=()=>100+(S.stats.appetite-1)*20;
@@ -223,6 +250,7 @@ function train(t){
   const k=t.k; S.xp[k]+=t.xp;
   let ups=0; while(S.xp[k]>=xpNeed(S.stats[k])){ S.xp[k]-=xpNeed(S.stats[k]); S.stats[k]++; ups++; }
   log(`${t.nm}: +${t.xp} ${STATS.find(s=>s.k===k).nm} XP`+(ups?` <span class="g">— LEVEL UP to ${S.stats[k]}!</span>`:'')+'.');
+  if(ups)SFX.levelup();else SFX.chomp();
   render();save();
 }
 function work(j){
@@ -232,12 +260,14 @@ function work(j){
   if(!spendAP())return;
   S.money+=j.pay; S.appetite=clamp(S.appetite+j.app,0,appetiteMax());
   log(`${j.nm}: <span class="g">+${fmtMoney(j.pay)}</span>.`);
+  SFX.cash();
   render();save();
 }
 function rest(){
   if(S.busy)return; if(!spendAP())return;
   S.appetite=clamp(S.appetite+20,0,appetiteMax()); S.fatigue=0;
   log('Rested — appetite up, jaw fresh.');
+  SFX.gulp();
   render();save();
 }
 function buy(s){
@@ -245,13 +275,15 @@ function buy(s){
   if(S.money<s.cost){log('Can\'t afford that surgery yet.');return;}
   S.money-=s.cost; S.up[s.k]=true;
   log(`!SURGERY! <span class="y">${s.nm}</span> installed.`);
+  SFX.good();
   render();save();
 }
-function buyImodium(){ if(S.money<10){log('Imodium is $10.');return;} S.money-=10;S.imodium++; log('Bought Imodium (×'+S.imodium+').'); render();save(); }
+function buyImodium(){ if(S.money<10){log('Imodium is $10.');return;} S.money-=10;S.imodium++; log('Bought Imodium (×'+S.imodium+').'); SFX.cash(); render();save(); }
 function endDay(){
   if(S.busy)return;
   S.day++; S.ap=3; S.appetite=clamp(S.appetite+12,0,appetiteMax());
   log(`<span class="y">— Day ${S.day} —</span> You wake up hungrier.`);
+  SFX.gulp();
   render();save();
 }
 
@@ -310,11 +342,14 @@ function playArena(c,res,idx){
   a.innerHTML=`<h3>${c.nm}</h3><div class="venue">entry ${fmtMoney(c.fee)} &middot; beat ${c.opp} &middot; purse ${fmtMoney(c.prize)}${c.haz?` &middot; <span style="color:var(--red)">hazard</span>`:''}</div>
     <div class="scores"><div class="s"><b>HANK</b><div class="me" id="me">0</div></div><div class="s"><b>BEAT</b><div class="opp">${c.opp}</div></div></div>
     <div class="progress"><i id="prog"></i></div><div class="tline" id="tl">ready…</div>
-    <div id="feed"></div><div class="result" id="rz"></div>`;
+    <div id="feed"></div>
+    <div style="text-align:center;margin-top:8px"><button class="act" id="skip" style="background:#3a2c52;box-shadow:none;font-size:11px">FAST &raquo;&raquo;</button></div>
+    <div class="result" id="rz"></div>`;
   $('ov').classList.add('on');
   const feed=$('feed'),me=$('me'),prog=$('prog'),tl=$('tl');
   const goal=Math.max(c.opp,res.maxEat,1);
-  let i=0;
+  let i=0, fast=false;
+  $('skip').onclick=()=>{ fast=true; $('skip').style.display='none'; };
   const step=()=>{
     if(i<res.ev.length){
       const e=res.ev[i];
@@ -325,7 +360,14 @@ function playArena(c,res,idx){
       me.style.color = n>c.opp?'var(--lime)':'var(--cyan)';
       prog.style.width=clamp(e.total/goal*100,0,100)+'%';
       tl.textContent=`tick ${i+1} / ${res.ev.length}`;
-      i++; setTimeout(step,380);
+      if(!fast){
+        if(e.line.indexOf('BUTTERFINGERS')===0)SFX.drop();
+        else if(e.cls==='b')SFX.bad();
+        else if(e.cls==='g')SFX.good();
+        else if(e.cls==='y')SFX.gulp();
+        else SFX.chomp();
+      }
+      i++; setTimeout(step,fast?45:380);
     } else { finishArena(c,res,idx); }
   };
   setTimeout(step,450);
@@ -333,6 +375,8 @@ function playArena(c,res,idx){
 
 function finishArena(c,res,idx){
   const rz=$('rz');
+  $('skip').style.display='none';
+  if(res.won)SFX.win();else SFX.lose();
   let payout=0, msg='';
   if(res.won){
     payout=c.prize; S.money+=payout; S.wins++;
@@ -442,6 +486,7 @@ function render(){
   const as=$('app-state'); as.textContent=state;
   as.style.color = rav?'var(--red)': frac>=0.6?'var(--lime)': frac<0.35?'var(--dim)':'var(--cyan)';
   $('fatigue-l').textContent = 'Jaw fatigue: '+(S.fatigue<10?'fresh':S.fatigue<40?'warming':S.fatigue<75?'tired':'cooked');
+  $('mutebtn').textContent=S.mute?'🔇':'🔊';
   // tabs
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.t===S.tab));
   $('panel').innerHTML=PANELS[S.tab]();
@@ -459,6 +504,7 @@ $('panel').addEventListener('click',e=>{
   else if(b.id==='imobtn') buyImodium();
 });
 $('endday').onclick=endDay;
+$('mutebtn').onclick=()=>{ S.mute=!S.mute; if(!S.mute)SFX.good(); render(); save(); };
 $('reset').onclick=()=>{ if(confirm('Reset Hank back to Day 1?')){ S=fresh(); save(); log('— New game. —'); render(); } };
 
 // ---------- boot ----------
